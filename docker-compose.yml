@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: email_metrics_db
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "5439:5432"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB:   ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  email-metrics:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: email_metrics_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    environment:
+      # OAuth2 / Graph API
+      TENANT_ID:      ${TENANT_ID}
+      CLIENT_ID:      ${CLIENT_ID}
+      CLIENT_SECRET:  ${CLIENT_SECRET}
+      EMAIL_ACCOUNT:  ${EMAIL_ACCOUNT}
+      GRAPH_BASE_URL: ${GRAPH_BASE_URL}
+
+      # Banco de dados
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB:   ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - .:/app
+    ports:
+      - "8985:8985"
+    command: python -m application.main
+
+volumes:
+  pgdata:
