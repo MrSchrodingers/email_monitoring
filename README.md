@@ -171,7 +171,7 @@ WHERE  sent_datetime >= (SELECT MAX(run_at) FROM metrics) - INTERVAL '1 hour'
 GROUP  BY 1;
 ```
 
-> Mais exemplos na pasta [`docs/sql/`](./docs/sql/).
+> Mais exemplos na pasta [`docs/sql/metabase_examples.md`](./docs/sql/metabase_examples.md).
 
 ---
 

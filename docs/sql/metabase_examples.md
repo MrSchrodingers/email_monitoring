@@ -1,5 +1,9 @@
 # Exemplos de consultas SQL para Metabase
 
+<p align="right">
+  <a href="../../README.md">⬅️ Voltar para o README</a>
+</p>
+
 ## 1 – Resumo diário por conta
 Visão geral: envios, entregas, respostas e taxas *clean*.
 
