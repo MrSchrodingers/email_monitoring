@@ -1,41 +1,41 @@
-# Email Metrics 📊
+# Email-Metrics 📊  
 
 [![Python](https://img.shields.io/badge/python-3.13+-blue?logo=python)](https://www.python.org/)　
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue?logo=postgresql)](https://www.postgresql.org/)　
-[![Microsoft Graph](https://img.shields.io/badge/Microsoft%20Graph-API-blue?logo=microsoft)](https://learn.microsoft.com/graph/)　
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-blue?logo=postgresql)](https://www.postgresql.org/)　
+[![Microsoft Graph](https://img.shields.io/badge/Microsoft%20Graph-API-blue?logo=microsoft)](https://learn.microsoft.com/graph)　
+[![Metabase](https://img.shields.io/badge/Metabase-0.49-blue?logo=metabase)](https://github.com/metabase/metabase)  
 [![License](https://img.shields.io/badge/license-GNU-green)](#license)
 
-> **Resumo curto**
-> Coleta métricas de campanhas de e-mail (contagem, entregas, bounces, respostas) direto da Microsoft Graph API, grava tudo em PostgreSQL e gera logs estruturados para observabilidade.
+> Coleta métricas de campanhas de e-mail via **Microsoft Graph**, grava em **PostgreSQL**
+> e oferece consultas prontas para **Metabase** – com logs estruturados para observabilidade.
 
 ---
 
-## Índice <!-- GitHub gera paginação/ancoras automaticamente -->
-
-1. [Visão geral](#visão-geral)
-2. [Fluxo de funcionamento](#fluxo-de-funcionamento)
-3. [Estrutura de diretórios](#estrutura-de-diretórios)
-4. [Variáveis de ambiente](#variáveis-de-ambiente)
-5. [Execução rápida](#execução-rápida)
-6. [Modo leigo × Modo técnico](#modo-leigo--x--modo-técnico)
-7. [Manual técnico](#manual-técnico)
-8. [Consultas úteis](#consultas-úteis)
-9. [Roadmap / TODO](#roadmap--todo)
-10. [Contribuição](#contribuição)
-11. [Licença](#license)
+## Índice <!-- GitHub gera as âncoras -->
+1. [Visão geral](#visão-geral)  
+2. [Fluxo de funcionamento](#fluxo-de-funcionamento)  
+3. [Banco & Modelo de dados](#banco-e-modelo-de-dados)  
+4. [Estrutura de diretórios](#estrutura-de-diretórios)  
+5. [Variáveis de ambiente](#variáveis-de-ambiente)  
+6. [Execução rápida](#execução-rápida)  
+7. [Modo leigo × Modo técnico](#modo-leigo--x--modo-técnico)  
+8. [Consultas para dashboards](#consultas-para-dashboards)  
+9. [Roadmap / TODO](#roadmap--todo)  
+10. [Contribuição](#contribuição)  
+11. [Licença](#license)  
 
 ---
 
 ## Visão geral
 
-| **Componente**           | **Responsabilidade**                                                                 |
-| ------------------------ | ------------------------------------------------------------------------------------ |
-| **GraphApiClient**       | Pega pastas e mensagens via Microsoft Graph com retries, timeout e paginação segura. |
-| **EmailMetricsService**  | Detecta *bounces* (falha de entrega) e *replies* por conversa; calcula taxas.        |
-| **PgEmailRepository**    | UPSERT de e-mails brutos (`emails`) e métricas diárias (`metrics`) em PostgreSQL.    |
-| **FetchAndStoreMetrics** | Orquestra: coleta → filtra → calcula métricas → persiste tudo.                       |
-| **CronScheduler**        | Roda o fluxo periodicamente (ou só uma vez, via `--once`).                           |
-| **Structlog**            | Logs JSON uniformes para Loki/ELK.                                                   |
+| Componente                | Responsabilidade |
+|---------------------------|------------------|
+| **GraphApiClient**        | Paginação segura + retries contra Graph API. |
+| **EmailMetricsService**   | Detecta *bounce* / *reply* por conversa e classifica a “temperatura” <br>• **quente** = replied  • **morno** = entregue sem reply  • **frio** = bounce |
+| **PgEmailRepository**     | UPSERT em `emails` e INSERT append-only em `metrics`. |
+| **FetchAndStoreMetrics**  | Orquestra para **N** contas simultâneas. |
+| **Structlog**             | JSON logs prontos para Loki / ELK. |
+| **Metabase (opcional)**   | Dashboards plug-and-play via docker-compose. |
 
 ---
 
@@ -43,17 +43,47 @@
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant Cron as CronScheduler
     participant UseCase as FetchAndStoreMetrics
-    participant Graph as Microsoft Graph API
+    participant Graph as Microsoft Graph
     participant Repo as PgEmailRepository
     Cron->>UseCase: job.execute()
     UseCase->>Graph: fetch_mail_folders()
     UseCase->>Graph: fetch_messages_in_folder()
-    UseCase->>UseCase: EmailMetricsService.calculate()
-    UseCase->>Repo: save_all(emails)          (flags is_bounced/is_replied)
-    UseCase->>Repo: save(metrics)
-```
+    UseCase->>UseCase: calcular métricas (bounce/reply)<br/>classificar temperatura
+    UseCase->>Repo: save_all(emails)  (UPSERT)
+    UseCase->>Repo: save(metrics)     (INSERT)
+````
+
+---
+
+## Banco e Modelo de dados
+
+### 1. accounts
+
+| coluna          | tipo          | descrição                 |
+| --------------- | ------------- | ------------------------- |
+| `id`            | `uuid` PK     | Gerado ao cadastrar conta |
+| `email_address` | `text` UNIQUE |                           |
+
+### 2. emails (row-level)
+
+| campo                 | tipo                           | observação             |
+| --------------------- | ------------------------------ | ---------------------- |
+| `recipient_addresses` | `text[]`                       | todos os destinatários |
+| `temperature_label`   | `text` (quente / morno / frio) |                        |
+| `temperature_pct`     | `int` ×10000 (0, 5000, 10000)  |                        |
+
+Chave única = `(account_id, message_id, conversation_id)`.
+
+### 3. metrics (snapshot diário)
+
+| clean                                | raw                         | ...                         |
+| ------------------------------------ | --------------------------- | --------------------------- |
+| `total_*` – filtrados e deduplicados | `raw_total_*` – visão bruta | `temperature_*` da campanha |
+
+BRIN index em `(account_id, run_at)` garante leitura rápida por período.
 
 ---
 
@@ -61,43 +91,48 @@ sequenceDiagram
 
 ```
 .
-├── adapters          # Integrações externas (Graph, SQLAlchemy, Scheduler)
-├── application       # Casos de uso
-├── domain            # Entidades e serviços de domínio
-├── ports             # Interfaces (hexagonal)
-├── config            # Settings, logging, env helper
-└── infrastructure    # Docker, compose, migrations (quando houver)
+├── adapters/           # integrações externas (Graph, SQL, cron)
+├── application/        # casos de uso orquestradores
+├── domain/             # entidades + regras de negócio
+├── ports/              # interfaces (hexagonal)
+├── config/             # .env, logging, settings
+├── infrastructure/     # docker-compose, metabase, migrations
+└── tests/
 ```
 
 ---
 
 ## Variáveis de ambiente
 
-| Chave                        | Exemplo                                     | Descrição                                |
-| ---------------------------- | ------------------------------------------- | ---------------------------------------- |
-| `TENANT_ID`                  | `463357ee-…`                                | Azure AD Tenant                          |
-| `CLIENT_ID`                  | `318b9b0a-…`                                | App registration (Graph)                 |
-| `CLIENT_SECRET`              | `…`                                         | Segredo do app                           |
-| `EMAIL_ACCOUNTS`             | `campanha@acme.com`                         | Conta(s) a ser analisada                 |
-| `SENT_FOLDER_NAME`           | `itens enviados`                            | Nome (case-insensitive) da pasta enviada |
-| `SUBJECT_FILTER`             | `OPORTUNIDADE DE ACORDO,PROPOSTA DE ACORDO` | Lista separada por vírgula               |
-| `IGNORED_RECIPIENT_PATTERNS` | `@empresaX,@spam`                           | Fragmentos de e-mail a ignorar           |
-| `POSTGRES_*`                 | …                                           | Host, porta, user, senha, db             |
+| chave                                   | exemplo / default                           |
+| --------------------------------------- | ------------------------------------------- |
+| **OAuth / Graph**                       |                                             |
+| `TENANT_ID` `CLIENT_ID` `CLIENT_SECRET` | credenciais do app registration             |
+| `EMAIL_ACCOUNTS`                        | `marketing@acme.com,suporte@acme.com`       |
+| **Filtros**                             |                                             |
+| `SUBJECT_FILTER`                        | `OPORTUNIDADE DE ACORDO,PROPOSTA DE ACORDO` |
+| `IGNORED_RECIPIENT_PATTERNS`            | `@spam,@test`                               |
+| `SENT_FOLDER_NAME`                      | `itens enviados`                            |
+| **PostgreSQL**                          |                                             |
+| `POSTGRES_HOST/PORT/DB/USER/PASSWORD`   | idem docker-compose                         |
+| **Extra**                               |                                             |
+| `BULK_CHUNK_SIZE`                       | batch UPSERT (default = 300)                |
 
 ---
 
 ## Execução rápida
 
-### 1 – Docker Compose
+### Docker Compose (recomendado)
 
 ```bash
-cp .env.example .env         # preencha credenciais
-docker compose up --build
+cp .env.example .env   # edite credenciais
+docker compose up --build   # inclui Metabase em :3878
 ```
 
-Logs aparecem em JSON no stdout; basta enviar ao Loki ou Stackdriver.
+* Logs estruturados em stdout.
+* Metabase inicializa com banco `metabase` dentro do mesmo PostgreSQL.
 
-### 2 – Somente Python (Poetry)
+### Execução única (Poetry)
 
 ```bash
 poetry install
@@ -108,92 +143,56 @@ poetry run python -m application.main --once
 
 ## Modo leigo × Modo técnico
 
-| Modo leigo                                                                                                          | Modo técnico                                                                                                           |
-| ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| O robô entra na conta de e-mail, conta quantas mensagens foram enviadas e quantas deram erro ou receberam resposta. | Integração OAuth2 Client Credentials → Graph `/mailFolders` e `/messages` → análise de *threads* por `conversationId`. |
-| Ele grava esses números num banco para você acompanhar se a campanha deu certo.                                     | Tabelas `emails` (row-level) e `metrics` (daily snapshot) com UPSERT.                                                  |
-| A cada X minutos ele repete a operação sozinho.                                                                     | `CronScheduler` aciona `FetchAndStoreMetrics`, configurável via CLI ou container env.                                  |
+| 💬 Leigo                                                                                          | 🛠️ Técnico                                                                       |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| O robô abre a caixa “Itens enviados”, conta quem recebeu, quem respondeu e quem voltou como erro. | Chamada à Graph API (`/messages?$filter=conversationId…`) e análise de cabeçalho. |
+| Grava tudo num banco para ver histórico.                                                          | UPSERT em `emails`, INSERT em `metrics`, índices BRIN.                            |
+| Classifica cada contato em quente, morno ou frio.                                                 | `temperature_label` via flags `is_replied / is_bounced`.                          |
 
 ---
 
-## Manual técnico
-
-<details>
-<summary>🛠️ Clique para detalhes</summary>
-
-### Regras de domínio
-
-* **Bounce** = qualquer mensagem na conversa cujo `subject` combine `undeliverable|falha de entrega|delivery has failed` **ou** remetente contenha `postmaster|mailer-daemon`.
-* **Reply** = mensagem na conversa cujo `from.address` ≠ `EMAIL_ACCOUNTS`, desde que não seja *bounced*.
-
-### Persistência
+## Consultas para dashboards
 
 ```sql
-CREATE TABLE emails (
-    id              uuid        PRIMARY KEY,
-    message_id      text,
-    subject         text,
-    sent_datetime   timestamptz,
-    is_read         boolean,
-    conversation_id text,
-    has_attachments boolean,
-    is_bounced      boolean NOT NULL DEFAULT false,
-    is_replied      boolean NOT NULL DEFAULT false
-);
+-- KPI diário por conta
+SELECT a.email_address AS "Conta",
+       m.date, m.total_sent, m.total_delivered,
+       ROUND(m.delivery_rate/100.0,2) AS "Delivery (%)",
+       ROUND(m.reply_rate/100.0,2)    AS "Reply (%)",
+       m.temperature_label
+FROM   public.metrics m
+JOIN   public.accounts a ON a.id = m.account_id
+ORDER  BY m.date DESC;
 
-CREATE TABLE metrics (
-    date            date PRIMARY KEY,
-    total_sent      int  NOT NULL,
-    total_delivered int  NOT NULL,
-    total_bounced   int  NOT NULL,
-    total_replied   int  NOT NULL,
-    total_no_reply  int  NOT NULL,
-    delivery_rate   int  NOT NULL,   -- ×10 000
-    reply_rate      int  NOT NULL
-);
+-- Distribuição de temperatura dos e-mails (última execução)
+SELECT temperature_label AS "Temperatura", COUNT(*) AS "E-mails"
+FROM   public.emails e
+WHERE  sent_datetime >= (SELECT MAX(run_at) FROM metrics) - INTERVAL '1 hour'
+GROUP  BY 1;
 ```
 
-### Logs
-
-```
-{
-  "timestamp":"2025-07-03T21:35:50Z",
-  "service":"email_metrics",
-  "event":"metrics.calc.success",
-  "total_sent":3097,
-  "total_bounced":12,
-  ...
-}
-```
-
-### Endpoints (futuros)
-
-* `/metrics` – export Prometheus
-* `/emails/bounced` – REST/GraphQL listagem
-
-</details>
+> Mais exemplos na pasta [`docs/sql/`](./docs/sql/).
 
 ---
 
-## Consultas úteis
+## Roadmap / TODO
 
-```sql
--- Últimos bounces
-SELECT subject, sent_datetime, message_id
-FROM emails
-WHERE is_bounced
-ORDER BY sent_datetime DESC;
+* [ ] Alembic migrations
+* [ ] Prometheus `/metrics` exporter
+* [ ] CLI `metabase seed` para criar dashboards automaticamente
+* [ ] Support a `bccRecipients` & `ccRecipients` parsing
+* [ ] Webhook for near-real-time processing
 
--- Taxa de abertura/retorno por dia
-SELECT
-  date,
-  delivery_rate / 100.0  AS delivery_pct,
-  reply_rate    / 100.0  AS reply_pct
-FROM metrics
-ORDER BY date DESC;
-```
+---
+
+## Contribuição
+
+1. Faça um fork e crie sua branch feature.
+2. Rode `pre-commit install` (isort, black, flake8).
+3. Abra o PR descrevendo o **porquê** da mudança.
+
 ---
 
 ## License
 
-GNU © 2025 — livre para uso e modificação.
+GNU © 2025 – use, modifique e compartilhe.
