@@ -9,7 +9,7 @@ from typing import Generator, List
 from ports.graph_client import GraphClientPort
 from application.dto.folder_dto import FolderDTO
 from application.dto.email_dto import EmailDTO
-from config.settings import GRAPH_BASE_URL, EMAIL_ACCOUNT, TOKEN_PROVIDER
+from config.settings import GRAPH_BASE_URL, TOKEN_PROVIDER
 
 logger = structlog.get_logger(__name__)
 
@@ -25,17 +25,16 @@ class GraphApiClient(GraphClientPort):
 
     def __init__(self) -> None:
         self.base_url = GRAPH_BASE_URL.rstrip("/")
-        self.user = EMAIL_ACCOUNT
         self.session = self._build_session()
 
     # --------------------------------------------------------------------- #
     #   API pública                                                         #
     # --------------------------------------------------------------------- #
-    def fetch_mail_folders(self) -> List[FolderDTO]:
-        log = logger.bind(user=self.user)
+    def fetch_mail_folders(self, account: str) -> List[FolderDTO]:
+        log = logger.bind(user=account)
         log.info("graph.fetch_mail_folders.start")
 
-        url = f"{self.base_url}/users/{self.user}/mailFolders"
+        url = f"{self.base_url}/users/{account}/mailFolders"
         folders = [
             self._folder_from_api(item)
             for page in self._paginate(url, log)
@@ -46,13 +45,13 @@ class GraphApiClient(GraphClientPort):
         return folders
 
     def fetch_messages_in_folder(
-        self, folder_id: str, page_size: int = 50
+        self, account: str, folder_id: str, page_size: int = 50
     ) -> List[EmailDTO]:
-        log = logger.bind(user=self.user, folder_id=folder_id, page_size=page_size)
+        log = logger.bind(user=account, folder_id=folder_id, page_size=page_size)
         log.info("graph.fetch_messages.start")
 
         url = (
-            f"{self.base_url}/users/{self.user}/mailFolders/{folder_id}/messages"
+            f"{self.base_url}/users/{account}/mailFolders/{folder_id}/messages"
             f"?$orderby=sentDateTime desc&$top={page_size}"
         )
 
@@ -68,13 +67,13 @@ class GraphApiClient(GraphClientPort):
     # ------------------------------------------------------------------ #
     #  Conversa completa (head)                                          #
     # ------------------------------------------------------------------ #
-    def fetch_conversation_head(self, conversation_id: str, top: int = 10) -> List[EmailDTO]:
+    def fetch_conversation_head(self, account: str, conversation_id: str, top: int = 10) -> List[EmailDTO]:
         """
         Busca até `top` mensagens de qualquer pasta que pertençam à conversa.
         Útil para detectar bounce ou reply sem varrer a mailbox inteira.
         """
         url = (
-            f"{self.base_url}/users/{self.user}/messages?"
+            f"{self.base_url}/users/{account}/messages?"
             f"$filter=conversationId eq '{conversation_id}'&$top={top}"
             f"&$select=subject,from,conversationId,sentDateTime,isRead,hasAttachments,toRecipients"
         )
@@ -156,6 +155,7 @@ class GraphApiClient(GraphClientPort):
 
         return EmailDTO(
             id=item["id"],
+            to_addresses=to_addresses,
             subject=item.get("subject", ""),
             sent_datetime=datetime.fromisoformat(
                 item["sentDateTime"].replace("Z", "+00:00")
@@ -166,5 +166,4 @@ class GraphApiClient(GraphClientPort):
             from_address=item.get("from", {})
             .get("emailAddress", {})
             .get("address", ""),
-            to_addresses=to_addresses,
         )

@@ -31,7 +31,7 @@ services:
       TENANT_ID:      ${TENANT_ID}
       CLIENT_ID:      ${CLIENT_ID}
       CLIENT_SECRET:  ${CLIENT_SECRET}
-      EMAIL_ACCOUNT:  ${EMAIL_ACCOUNT}
+      EMAIL_ACCOUNTS: ${EMAIL_ACCOUNTS}
       GRAPH_BASE_URL: ${GRAPH_BASE_URL}
 
       # Banco de dados
@@ -47,5 +47,17 @@ services:
       - "8985:8985"
     command: python -m application.main
 
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "3878:3000"
+    volumes:
+      - metabase-data:/metabase-data
+
 volumes:
   pgdata:
+  metabase-data:

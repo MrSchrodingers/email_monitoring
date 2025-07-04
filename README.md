@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.13+-blue?logo=python)](https://www.python.org/)　
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue?logo=postgresql)](https://www.postgresql.org/)　
 [![Microsoft Graph](https://img.shields.io/badge/Microsoft%20Graph-API-blue?logo=microsoft)](https://learn.microsoft.com/graph/)　
-[![License](https://img.shields.io/badge/license-MIT-green)](#license)
+[![License](https://img.shields.io/badge/license-GNU-green)](#license)
 
 > **Resumo curto**
 > Coleta métricas de campanhas de e-mail (contagem, entregas, bounces, respostas) direto da Microsoft Graph API, grava tudo em PostgreSQL e gera logs estruturados para observabilidade.
@@ -78,7 +78,7 @@ sequenceDiagram
 | `TENANT_ID`                  | `463357ee-…`                                | Azure AD Tenant                          |
 | `CLIENT_ID`                  | `318b9b0a-…`                                | App registration (Graph)                 |
 | `CLIENT_SECRET`              | `…`                                         | Segredo do app                           |
-| `EMAIL_ACCOUNT`              | `campanha@acme.com`                         | Conta a ser analisada                    |
+| `EMAIL_ACCOUNTS`             | `campanha@acme.com`                         | Conta(s) a ser analisada                 |
 | `SENT_FOLDER_NAME`           | `itens enviados`                            | Nome (case-insensitive) da pasta enviada |
 | `SUBJECT_FILTER`             | `OPORTUNIDADE DE ACORDO,PROPOSTA DE ACORDO` | Lista separada por vírgula               |
 | `IGNORED_RECIPIENT_PATTERNS` | `@empresaX,@spam`                           | Fragmentos de e-mail a ignorar           |
@@ -124,7 +124,7 @@ poetry run python -m application.main --once
 ### Regras de domínio
 
 * **Bounce** = qualquer mensagem na conversa cujo `subject` combine `undeliverable|falha de entrega|delivery has failed` **ou** remetente contenha `postmaster|mailer-daemon`.
-* **Reply** = mensagem na conversa cujo `from.address` ≠ `EMAIL_ACCOUNT`, desde que não seja *bounced*.
+* **Reply** = mensagem na conversa cujo `from.address` ≠ `EMAIL_ACCOUNTS`, desde que não seja *bounced*.
 
 ### Persistência
 

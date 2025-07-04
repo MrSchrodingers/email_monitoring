@@ -11,7 +11,7 @@ CLIENT_ID     = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
 GRAPH_BASE_URL = os.getenv("GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0")
-EMAIL_ACCOUNT  = os.getenv("EMAIL_ACCOUNT")
+EMAIL_ACCOUNTS: list[str] = _split_list(os.getenv("EMAIL_ACCOUNTS"))
 
 # PostgreSQL
 DB_HOST     = os.getenv("POSTGRES_HOST")
@@ -24,6 +24,7 @@ DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 SENT_FOLDER_NAME           = os.getenv("SENT_FOLDER_NAME", "itens enviados").lower()
 SUBJECT_FILTER             = _split_list(os.getenv("SUBJECT_FILTER"))
 IGNORED_RECIPIENT_PATTERNS = _split_list(os.getenv("IGNORED_RECIPIENT_PATTERNS"))
+IGNORE_SUBJECT_PREFIXES = ["RES:", "ENC:", "FW:", "FWD:"]
 
 # String de conexão SQLAlchemy (ou psycopg2)
 DB_URL = (

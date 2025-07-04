@@ -1,126 +1,216 @@
-from dataclasses import asdict
-from typing import List
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean, Date, inspect
+from __future__ import annotations
+
+import os
+import uuid
+from typing import List, Dict
+
+import structlog
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    DateTime,
+    Boolean,
+    Date,
+    create_engine,
+    select,
+    Index,
+    UniqueConstraint,
+    func,
+    ForeignKey,
+)
+from sqlalchemy.dialects.postgresql import insert as pg_insert, UUID, ARRAY
 from sqlalchemy.orm import declarative_base, sessionmaker
-from ports.persistence import EmailRepositoryPort, MetricsRepositoryPort
+
 from domain.model.email import Email
 from domain.model.metrics import EmailMetrics
-from sqlalchemy.dialects.postgresql import insert
-import structlog
+from domain.service.email_metrics_service import email_label
+from ports.persistence import EmailRepositoryPort, MetricsRepositoryPort
 
 logger = structlog.get_logger(__name__)
+
 Base = declarative_base()
+CHUNK_SIZE = int(os.getenv("BULK_CHUNK_SIZE", 300))
+
+# ------------------------------------------------------------------ #
+#  ORM models                                                        #
+# ------------------------------------------------------------------ #
+class AccountORM(Base):
+    __tablename__ = "accounts"
+    id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email_address = Column(String, unique=True, nullable=False)
+
 
 class EmailORM(Base):
     __tablename__ = "emails"
 
-    id              = Column(String, primary_key=True)
-    message_id      = Column(String)
+    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    recipient_addresses = Column(ARRAY(String), nullable=False)
+    account_id      = Column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False, index=True)
+    message_id      = Column(String, nullable=False)
+    conversation_id = Column(String, nullable=False)
     subject         = Column(String)
     sent_datetime   = Column(DateTime)
-    is_read         = Column(Boolean, index=True)
-    conversation_id = Column(String)
-    has_attachments = Column(Boolean, index=True)
+    is_read         = Column(Boolean)
+    has_attachments = Column(Boolean)
+    is_bounced      = Column(Boolean, nullable=False, default=False)
+    is_replied      = Column(Boolean, nullable=False, default=False)
+    temperature_label = Column(String,  nullable=False, default="frio")
 
-    is_bounced = Column(Boolean, default=False, nullable=False, index=True)
-    is_replied = Column(Boolean, default=False, nullable=False, index=True)
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "message_id", "conversation_id",
+            name="uix_account_msg_conv",
+        ),
+    )
+
 
 class MetricsORM(Base):
     __tablename__ = "metrics"
 
-    date            = Column(Date, primary_key=True)
-    total_sent      = Column(Integer, nullable=False)
-    total_delivered = Column(Integer, nullable=False)
-    total_bounced   = Column(Integer, nullable=False)
-    total_replied   = Column(Integer, nullable=False)
-    total_no_reply  = Column(Integer, nullable=False)
+    id                   = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id           = Column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False, index=True)
+    run_at               = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    date                 = Column(Date, index=True)
 
-    delivery_rate   = Column(Integer, nullable=False)   # armazenamos ×10 000 (permite inteiro)
-    reply_rate      = Column(Integer, nullable=False)   # idem
+    # cleansed
+    total_sent           = Column(Integer, nullable=False)
+    total_delivered      = Column(Integer, nullable=False)
+    total_bounced        = Column(Integer, nullable=False)
+    total_replied        = Column(Integer, nullable=False)
+    total_no_reply       = Column(Integer, nullable=False)
 
+    # raw
+    raw_total_sent       = Column(Integer, nullable=False)
+    raw_total_delivered  = Column(Integer, nullable=False)
+    raw_total_bounced    = Column(Integer, nullable=False)
+    raw_total_replied    = Column(Integer, nullable=False)
+    raw_total_no_reply   = Column(Integer, nullable=False)
+
+    delivery_rate        = Column(Integer, nullable=False)   # ×10 000
+    reply_rate           = Column(Integer, nullable=False)
+    temperature_label = Column(String, nullable=False)
+
+    __table_args__ = (
+        Index("ix_metrics_acc_run_brin", "account_id", "run_at", postgresql_using="brin"),
+    )
+
+
+# ------------------------------------------------------------------ #
+#  Repository                                                        #
+# ------------------------------------------------------------------ #
 class PgEmailRepository(EmailRepositoryPort, MetricsRepositoryPort):
     def __init__(self, db_url: str):
         self.engine = create_engine(db_url)
-        self.Session = sessionmaker(bind=self.engine)
-        self._ensure_tables()
+        self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
+        # cria todas as tabelas (primeiro boot) — agora só UUID
+        Base.metadata.create_all(self.engine)
 
-    def list_bounced(self) -> List[EmailORM]:
-        with self.Session() as s:
-            return (
-                s.query(EmailORM)
-                .filter(EmailORM.is_bounced.is_(True))
-                .order_by(EmailORM.sent_datetime.desc())
-                .all()
-            )
-        
-    def _ensure_tables(self):
-        # Só cria se não existir
-        inspector = inspect(self.engine)
-        tables = inspector.get_table_names()
-        if "emails" not in tables or "metrics" not in tables:
-            Base.metadata.create_all(self.engine)
+    # -------------------------  e-mails  ----------------------------- #
+    def save_all(self, account_email: str, emails: List[Email]) -> None:
+        if not emails:
+            logger.info("email_repo.save_all.skip", reason="empty_batch")
+            return
 
-    def save_all(self, emails: List[Email]):
-        log = logger.bind(total=len(emails))
+        log = logger.bind(account=account_email, total=len(emails))
         session = self.Session()
         try:
-            for e in emails:
-                email_orm = EmailORM(
-                    id=str(e.id),
-                    message_id=e.message_id,
-                    subject=e.subject,
-                    sent_datetime=e.sent_datetime,
-                    is_read=bool(e.is_read),
-                    conversation_id=e.conversation_id,
-                    has_attachments=bool(e.has_attachments),
-                    is_bounced=getattr(e, "is_bounced", False),
-                    is_replied=getattr(e, "is_replied", False),
-                )
-                # UPSERT para Postgres
-                session.merge(email_orm)
+            acc_id = self._ensure_account(session, account_email)
+
+            for i in range(0, len(emails), CHUNK_SIZE):
+                self._upsert_batch(session, acc_id, emails[i : i + CHUNK_SIZE])
             session.commit()
             log.info("email_repo.save_all.success")
         except Exception:
+            session.rollback()
             log.exception("email_repo.save_all.error")
             raise
         finally:
             session.close()
 
-    def save(self, metrics: EmailMetrics) -> None:
-        log = logger.bind(date=str(metrics.date))
+    # -------------------------  métricas  ---------------------------- #
+    def save(self, metrics: EmailMetrics, account_email: str) -> None:
         session = self.Session()
-
+        log = logger.bind(id=str(metrics.id), account=account_email)
         try:
-            stmt = insert(MetricsORM).values(
-                date=metrics.date,
-                total_sent=metrics.total_sent,
-                total_delivered=metrics.total_delivered,
-                total_bounced=metrics.total_bounced,
-                total_replied=metrics.total_replied,
-                total_no_reply=metrics.total_no_reply,
-                delivery_rate=int(metrics.delivery_rate * 10_000),
-                reply_rate=int(metrics.reply_rate * 10_000),
-            ).on_conflict_do_update(
-                index_elements=[MetricsORM.date],
-                set_={
-                    "total_sent":      metrics.total_sent,
-                    "total_delivered": metrics.total_delivered,
-                    "total_bounced":   metrics.total_bounced,
-                    "total_replied":   metrics.total_replied,
-                    "total_no_reply":  metrics.total_no_reply,
-                    "delivery_rate":   int(metrics.delivery_rate * 10_000),
-                    "reply_rate":      int(metrics.reply_rate * 10_000),
-                },
+            acc_id = self._ensure_account(session, account_email)
+
+            session.add(
+                MetricsORM(
+                    id=metrics.id,
+                    account_id=acc_id,
+                    run_at=metrics.run_at,
+                    date=metrics.date,
+                    total_sent=metrics.total_sent,
+                    total_delivered=metrics.total_delivered,
+                    total_bounced=metrics.total_bounced,
+                    total_replied=metrics.total_replied,
+                    total_no_reply=metrics.total_no_reply,
+                    raw_total_sent=metrics.raw_total_sent,
+                    raw_total_delivered=metrics.raw_total_delivered,
+                    raw_total_bounced=metrics.raw_total_bounced,
+                    raw_total_replied=metrics.raw_total_replied,
+                    raw_total_no_reply=metrics.raw_total_no_reply,
+                    delivery_rate=int(metrics.delivery_rate * 10_000),
+                    reply_rate=int(metrics.reply_rate * 10_000),
+                    temperature_label = metrics.temperature_label,
+                )
             )
-
-            session.execute(stmt)
             session.commit()
-            log.info("metrics_repo.save.success", **asdict(metrics))
-
+            log.info("metrics_repo.insert.success")
         except Exception:
-            log.exception("metrics_repo.save.error")
             session.rollback()
+            log.exception("metrics_repo.insert.error")
             raise
-
         finally:
             session.close()
+
+    # ------------------------- helpers ------------------------------- #
+    def _ensure_account(self, session, email: str) -> uuid.UUID:
+        """
+        UPSERT de conta e retorna o UUID.
+        Usa ON CONFLICT DO NOTHING + RETURNING para ser thread-safe.
+        """
+        stmt = (
+            pg_insert(AccountORM)
+            .values(id=uuid.uuid4(), email_address=email)
+            .on_conflict_do_nothing()
+            .returning(AccountORM.id)
+        )
+        acc_id = session.execute(stmt).scalar()
+        if acc_id is None:  # já existia — busca
+            acc_id = session.execute(
+                select(AccountORM.id).where(AccountORM.email_address == email)
+            ).scalar_one()
+        return acc_id
+
+    @staticmethod
+    def _build_email_dict(acc_id: uuid.UUID, e: Email) -> Dict:
+        return {
+            "id": e.id,
+            "recipient_addresses": e.to_addresses,
+            "account_id": acc_id,
+            "message_id": e.message_id,
+            "conversation_id": e.conversation_id,
+            "subject": e.subject,
+            "sent_datetime": e.sent_datetime,
+            "is_read": e.is_read,
+            "has_attachments": e.has_attachments,
+            "is_bounced": getattr(e, "is_bounced", False),
+            "is_replied": getattr(e, "is_replied", False),
+            "temperature_label": e.temperature_label or email_label(e.is_replied, e.is_bounced),
+        }
+
+    def _upsert_batch(self, session, acc_id: uuid.UUID, batch: List[Email]) -> None:
+        insert_stmt = pg_insert(EmailORM).values(
+            [self._build_email_dict(acc_id, e) for e in batch]
+        )
+        stmt = insert_stmt.on_conflict_do_update(
+            index_elements=["account_id", "message_id", "conversation_id"],
+            set_={
+                c.name: insert_stmt.excluded[c.name]
+                for c in EmailORM.__table__.columns
+                if c.name not in ("id", "account_id")
+            },
+        )
+        session.execute(stmt)
