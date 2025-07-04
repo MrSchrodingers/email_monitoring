@@ -12,6 +12,3 @@ dist/
 
 # Ignorar variáveis de ambiente
 .env
-
-# Ignorar documentações de Content e Tree
-/docs/*

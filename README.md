@@ -175,24 +175,6 @@ GROUP  BY 1;
 
 ---
 
-## Roadmap / TODO
-
-* [ ] Alembic migrations
-* [ ] Prometheus `/metrics` exporter
-* [ ] CLI `metabase seed` para criar dashboards automaticamente
-* [ ] Support a `bccRecipients` & `ccRecipients` parsing
-* [ ] Webhook for near-real-time processing
-
----
-
-## Contribuição
-
-1. Faça um fork e crie sua branch feature.
-2. Rode `pre-commit install` (isort, black, flake8).
-3. Abra o PR descrevendo o **porquê** da mudança.
-
----
-
 ## License
 
 GNU © 2025 – use, modifique e compartilhe.
