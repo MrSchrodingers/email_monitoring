@@ -6,19 +6,31 @@ from application.usecase.fetch_and_store_metrics import FetchAndStoreMetrics
 from domain.service.email_metrics_service import EmailMetricsService
 from config.settings import DB_URL
 from config.logging import configure_logging
-configure_logging()  
+
+configure_logging() 
 
 import structlog  # noqa: E402
 logger = structlog.get_logger(__name__)
 
-def make_job():
+def make_job() -> FetchAndStoreMetrics:
+    """
+    Constrói o objeto do caso de uso com todas as suas dependências.
+    """
     logger.info("boot.make_job")
     
-    graph_client    = GraphApiClient()
-    email_repo      = PgEmailRepository(DB_URL)
-    metrics_repo    = email_repo
+    graph_client = GraphApiClient()
+    email_repo = PgEmailRepository(DB_URL)
+    metrics_repo = email_repo 
+    
     metrics_service = EmailMetricsService(graph_client)
-    return FetchAndStoreMetrics(graph_client, email_repo, metrics_repo, metrics_service)
+    
+    use_case = FetchAndStoreMetrics(
+        graph_client=graph_client,
+        email_repo=email_repo,
+        metrics_repo=metrics_repo,
+        metrics_service=metrics_service
+    )
+    return use_case
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -32,7 +44,9 @@ if __name__ == "__main__":
     job = make_job()
 
     if args.once:
+        logger.info("main.run_mode.once")
         job.execute()
     else:
+        logger.info("main.run_mode.scheduler")
         scheduler = CronScheduler(job)
         scheduler.start()

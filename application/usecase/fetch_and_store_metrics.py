@@ -108,12 +108,16 @@ class FetchAndStoreMetrics:
 
     @staticmethod
     def _to_domain(dto: EmailDTO) -> Email:
+        """ Mapeia o internet_message_id para o objeto de domínio. """
         return Email(
-            message_id=dto.id,
+            message_id=dto.id, 
+            internet_message_id=dto.internet_message_id, 
             subject=dto.subject,
             sent_datetime=dto.sent_datetime,
             is_read=dto.is_read,
             conversation_id=dto.conversation_id,
             has_attachments=dto.has_attachments,
-            to_addresses=dto.to_addresses,    
+            to_addresses=dto.to_addresses,
+            importance=dto.importance,
+            is_read_receipt_requested=dto.is_read_receipt_requested,
         )

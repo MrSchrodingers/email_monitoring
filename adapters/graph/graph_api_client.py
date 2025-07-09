@@ -21,7 +21,7 @@ class GraphApiClient(GraphClientPort):
     Produz DTOs prontos para a camada de aplicação.
     """
 
-    _TIMEOUT = (3.05, 30)  # (connect, read)
+    _TIMEOUT = (3.05, 60)  # (connect, read)
 
     def __init__(self) -> None:
         self.base_url = GRAPH_BASE_URL.rstrip("/")
@@ -44,15 +44,38 @@ class GraphApiClient(GraphClientPort):
         log.info("graph.fetch_mail_folders.success", total=len(folders))
         return folders
 
+    def fetch_message_detail(self, account: str, message_id: str) -> dict:
+        """Retorna o corpo JSON completo (`/messages/{id}`)"""
+        url = f"{self.base_url}/users/{account}/messages/{message_id}"
+        return self._get(url)
+
+    def fetch_message_mime(self, account: str, message_id: str) -> str:
+        """
+        Retorna o MIME bruto (`/messages/{id}/$value`).
+        Usa streaming para reduzir uso de memória.
+        """
+        url = f"{self.base_url}/users/{account}/messages/{message_id}/$value"
+        with self.session.get(url, headers=self._headers(), timeout=self._TIMEOUT, stream=True) as resp:
+            resp.raise_for_status()
+            return resp.content.decode(errors="replace")
+        
     def fetch_messages_in_folder(
         self, account: str, folder_id: str, page_size: int = 50
     ) -> List[EmailDTO]:
         log = logger.bind(user=account, folder_id=folder_id, page_size=page_size)
         log.info("graph.fetch_messages.start")
 
+        fields = [
+            "id", "subject", "sentDateTime", "isRead", "conversationId",
+            "hasAttachments", "from", "toRecipients", "ccRecipients",
+            "importance", "isReadReceiptRequested", "isDeliveryReceiptRequested",
+            "internetMessageId"
+        ]
+        select_query = f"$select={','.join(fields)}"
+
         url = (
             f"{self.base_url}/users/{account}/mailFolders/{folder_id}/messages"
-            f"?$orderby=sentDateTime desc&$top={page_size}"
+            f"?$orderby=sentDateTime desc&{select_query}&$top={page_size}"
         )
 
         emails = [
@@ -75,7 +98,7 @@ class GraphApiClient(GraphClientPort):
         url = (
             f"{self.base_url}/users/{account}/messages?"
             f"$filter=conversationId eq '{conversation_id}'&$top={top}"
-            f"&$select=subject,from,conversationId,sentDateTime,isRead,hasAttachments,toRecipients"
+            f"&$select=subject,from,conversationId,sentDateTime,isRead,hasAttachments,toRecipients,importance,isReadReceiptRequested,isDeliveryReceiptRequested,bodyPreview" # ADICIONADO bodyPreview
         )
         page = self._get(url)
         return [
@@ -145,25 +168,29 @@ class GraphApiClient(GraphClientPort):
     @staticmethod
     def _email_from_api(item: dict) -> EmailDTO:
         """
-        Converte payload da Graph API em EmailDTO, preenchendo valores
-        padrão quando algum campo não foi solicitado no $select.
+        Converte o payload da API em EmailDTO, garantindo que
+        o 'internetMessageId' é capturado corretamente.
         """
         to_addresses = [
             r.get("emailAddress", {}).get("address")
             for r in item.get("toRecipients", [])
-        ] or []
+            if r.get("emailAddress", {}).get("address")
+        ]
 
         return EmailDTO(
-            id=item["id"],
-            to_addresses=to_addresses,
+            id=item.get("id"),
             subject=item.get("subject", ""),
             sent_datetime=datetime.fromisoformat(
                 item["sentDateTime"].replace("Z", "+00:00")
             ).astimezone(timezone.utc),
             is_read=item.get("isRead", False),
-            conversation_id=item["conversationId"],
+            conversation_id=item.get("conversationId"),
             has_attachments=item.get("hasAttachments", False),
-            from_address=item.get("from", {})
-            .get("emailAddress", {})
-            .get("address", ""),
+            from_address=item.get("from", {}).get("emailAddress", {}).get("address", ""),
+            to_addresses=to_addresses,
+            internet_message_id=item.get("internetMessageId"), 
+            importance=item.get("importance"),
+            is_read_receipt_requested=item.get("isReadReceiptRequested", False),
+            body_preview=item.get("bodyPreview", "")
         )
+
