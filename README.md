@@ -209,7 +209,7 @@ ORDER BY
   "Índice de Performance" DESC;
 ```
 
-> Veja a lista completa de 12 KPIs otimizados em [`docs/sql/metabase_examples.md`](https://www.google.com/search?q=./docs/sql/metabase_examples.md).
+> Veja a lista completa de 12 KPIs em [`docs/sql/metabase_examples.md`](./docs/sql/metabase_examples.md).
 
 -----
 
@@ -217,11 +217,9 @@ ORDER BY
 
   - [ ] **Entidade `Contatos`**: Criar uma tabela `contacts` para rastrear o histórico de engajamento e a "saúde" de cada destinatário ao longo do tempo.
   - [ ] **Análise de Sentimento**: Implementar uma análise básica de sentimento no corpo das respostas para classificar o humor do cliente (positivo, negativo, neutro).
-  - [ ] **Webhooks**: Usar webhooks do Microsoft Graph para processamento de e-mails em tempo real, em vez de polling agendado.
-  - [ ] **Testes de Cobertura**: Aumentar a cobertura de testes, especialmente para o `EmailMetricsService`.
 
 -----
 
 ## Licença
 
-Distribuído sob a licença GNU. Veja `LICENSE` para mais informações.
+Distribuído sob a licença GNU.
