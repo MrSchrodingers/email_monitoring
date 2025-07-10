@@ -1,1 +1,0 @@
-SELECT a.email_address AS "Conta", temperature_label AS "Temperatura", COUNT(*) AS "Total" FROM emails e JOIN accounts a ON e.account_id=a.id WHERE e.sent_datetime >= DATE_TRUNC('year', CURRENT_DATE) AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%' GROUP BY 1, 2 ORDER BY 1, 2;

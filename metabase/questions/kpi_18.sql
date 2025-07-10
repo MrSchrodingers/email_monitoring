@@ -1,1 +1,0 @@
-SELECT recipient AS "Destinatário Apenas com Bounce" FROM (SELECT unnest(recipient_addresses) AS recipient, COUNT(*) as total, SUM(CASE WHEN is_bounced THEN 1 ELSE 0 END) as bounces FROM public.emails GROUP BY 1) as subquery WHERE total = bounces AND total > 2 ORDER BY total DESC LIMIT 30;

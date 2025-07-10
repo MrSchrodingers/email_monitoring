@@ -1,1 +1,0 @@
-SELECT a.email_address AS "Conta", AVG(e.engagement_score) AS "Pontuação Média no Ano" FROM emails e JOIN accounts a ON e.account_id=a.id WHERE e.sent_datetime >= DATE_TRUNC('year', CURRENT_DATE) AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%' GROUP BY 1 ORDER BY 2 DESC;

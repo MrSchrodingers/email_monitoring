@@ -1,1 +1,0 @@
-SELECT EXTRACT(ISODOW FROM sent_datetime) AS day_of_week, CASE WHEN EXTRACT(ISODOW FROM sent_datetime) < 6 THEN 'Dia de Semana' ELSE 'Fim de Semana' END AS "Tipo de Dia", ROUND(AVG(engagement_score), 2) AS "Pontuação Média" FROM emails WHERE sent_datetime >= (CURRENT_DATE - INTERVAL '90 days') GROUP BY 1, 2 ORDER BY 1;

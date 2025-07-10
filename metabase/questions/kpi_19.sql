@@ -1,1 +1,0 @@
-SELECT a.email_address as "Conta", DATE_TRUNC('month', m.date)::date as "Mês", ROUND(AVG(m.reply_rate)/100.0, 2) as "Taxa Média de Resposta (%)" FROM public.metrics m JOIN public.accounts a ON m.account_id=a.id GROUP BY 1, 2 ORDER BY 1, 2;

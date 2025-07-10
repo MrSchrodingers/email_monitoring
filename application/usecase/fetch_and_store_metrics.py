@@ -66,12 +66,18 @@ class FetchAndStoreMetrics:
                     for d in raw_dto
                     if any(expr.lower() in (d.subject or "").lower() for expr in SUBJECT_FILTER)
                 ]
+                
+                test_pattern = "oportunidade de acordo: - parte:"
+                prod_dto = [
+                    d for d in subj_filtered
+                    if test_pattern not in (d.subject or "").lower()
+                ]
 
                 def _ignored(dto: EmailDTO) -> bool:
                     recip = " ".join(dto.to_addresses).lower()
                     return any(p in recip for p in IGNORED_RECIPIENT_PATTERNS)
 
-                filtered_dto = [d for d in subj_filtered if not _ignored(d)]
+                filtered_dto = [d for d in prod_dto if not _ignored(d)]
                 emails = [self._to_domain(dto) for dto in filtered_dto]
 
                 # 3️⃣  Métricas (também marca flags nos objetos)
