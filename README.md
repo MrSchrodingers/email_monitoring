@@ -14,14 +14,14 @@
 
 1.  [Visão Geral](https://www.google.com/search?q=%23vis%C3%A3o-geral)
 2.  [Principais Métricas e Conceitos](https://www.google.com/search?q=%23principais-m%C3%A9tricas-e-conceitos)
-3.  [Fluxo de Funcionamento](https://www.google.com/search?q=%23fluxo-de-funcionamento)
-4.  [Modelo de Dados](https://www.google.com/search?q=%23modelo-de-dados)
-5.  [Estrutura de Diretórios](https://www.google.com/search?q=%23estrutura-de-diret%C3%B3rios)
-6.  [Variáveis de Ambiente](https://www.google.com/search?q=%23vari%C3%A1veis-de-ambiente)
+3.  [Pré-requisitos e Configuração](https://www.google.com/search?q=%23pr%C3%A9-requisitos-e-configura%C3%A7%C3%A3o)
+4.  [Fluxo de Funcionamento](https://www.google.com/search?q=%23fluxo-de-funcionamento)
+5.  [Modelo de Dados](https://www.google.com/search?q=%23modelo-de-dados)
+6.  [Estrutura de Diretórios](https://www.google.com/search?q=%23estrutura-de-diret%C3%B3rios)
 7.  [Execução Rápida](https://www.google.com/search?q=%23execu%C3%A7%C3%A3o-r%C3%A1pida)
 8.  [Consultas para Dashboards](https://www.google.com/search?q=%23consultas-para-dashboards)
 9.  [Roadmap / TODO](https://www.google.com/search?q=%23roadmap--todo)
-10. [Licença](https://www.google.com/search?q=%23licen%C3%A7a)
+11. [Licença](https://www.google.com/search?q=%23licen%C3%A7a)
 
 -----
 
@@ -67,6 +67,52 @@ Para evitar falsos positivos, a detecção é multicamada:
 
 -----
 
+## Pré-requisitos e Configuração
+
+### 1\. Registro de Aplicativo no Azure Active Directory
+
+Para que a aplicação possa acessar os dados via API, é necessário registrar um aplicativo no Azure AD e conceder as permissões corretas.
+
+1.  **Acesse o portal do Azure** \> **Azure Active Directory** \> **Registros de aplicativo**.
+
+2.  Clique em **Novo registro** e dê um nome à sua aplicação (ex: `EmailMetricsService`).
+
+3.  Após a criação, anote o **ID do Aplicativo (cliente)** e o **ID do Diretório (locatário)**.
+
+4.  No menu do aplicativo, vá para **Certificados e segredos** \> **Segredos do cliente** e crie um **Novo segredo do cliente**. Copie o **Valor** do segredo imediatamente, pois ele não será exibido novamente.
+
+5.  Vá para **Permissões de API** \> **Adicionar uma permissão** \> **Microsoft Graph**.
+
+6.  Selecione **Permissões de aplicativo** (a aplicação roda sem um usuário logado).
+
+7.  Adicione a seguinte permissão:
+
+    | Permissão | Tipo | Descrição |
+    | :--- | :--- | :--- |
+    | `Mail.Read` | Aplicativo | Permite que a aplicação leia e-mails em **qualquer caixa de correio** sem um usuário presente. |
+
+8.  Clique no botão **"Conceder consentimento do administrador para [Seu Tenant]"**. Este passo é **obrigatório** para que as permissões de aplicativo funcionem.
+
+### 2\. Variáveis de Ambiente
+
+Crie um arquivo `.env` na raiz do projeto (usando `.env.example` como base) e preencha com as credenciais obtidas no passo anterior e as configurações do projeto.
+
+| Chave | Exemplo / Descrição |
+| :--- | :--- |
+| **OAuth / Graph** | |
+| `TENANT_ID` | ID do Diretório (locatário) do seu Azure AD. |
+| `CLIENT_ID` | ID do Aplicativo (cliente) registrado. |
+| `CLIENT_SECRET` | O **valor** do segredo do cliente que você criou. |
+| `EMAIL_ACCOUNTS` | Lista de e-mails a serem monitorados, separados por vírgula. |
+| **Filtros e Regras** | |
+| `SUBJECT_FILTER` | `OPORTUNIDADE DE ACORDO,PROPOSTA` (Processa apenas e-mails cujos assuntos contenham um destes termos). |
+| `IGNORE_SUBJECT_PREFIXES`| `ENC,FW,RESPOSTA AUTOMÁTICA` (Prefixos de assunto que não são considerados respostas genuínas). |
+| `SENT_FOLDER_NAME` | `Itens Enviados` (Nome da pasta de onde os e-mails são lidos). |
+| **PostgreSQL** | |
+| `POSTGRES_HOST/PORT/DB/USER/PASSWORD` | Credenciais de acesso ao banco de dados. |
+
+-----
+
 ## Fluxo de Funcionamento
 
 ```mermaid
@@ -94,32 +140,27 @@ sequenceDiagram
 
 ### Tabela `emails` (Dados por E-mail)
 
-Armazena informações detalhadas sobre cada e-mail enviado e sua interação.
-
 | Coluna | Tipo | Descrição |
 | :--- | :--- | :--- |
 | `id` | `uuid` (PK) | Identificador único do registro. |
 | `account_id` | `uuid` (FK) | Conta que realizou o envio. |
-| `conversation_id` | `text` | ID da thread de conversa do Microsoft Graph. |
 | `is_bounced` | `boolean` | `True` se o e-mail sofreu bounce. |
 | `is_replied` | `boolean` | `True` se o e-mail foi respondido por um humano. |
 | `engagement_score`| `integer` | Pontuação de -100 a 70 baseada na interação. |
 | `temperature_label`| `text` | Rótulo "quente", "morno" ou "frio" baseado na pontuação. |
-| `reply_latency_sec`| `float` | Tempo em segundos entre o envio e a resposta. |
-
-*Chave única da tabela: `(account_id, message_id, conversation_id)`.*
 
 ### Tabela `metrics` (Snapshot Diário)
-
-Agrega os resultados de todas as contas para cada dia de operação.
 
 | Coluna | Tipo | Descrição |
 | :--- | :--- | :--- |
 | `total_sent` | `integer` | Total de conversas iniciadas (sem `RES:`, `ENC:`, etc.). |
 | `total_replied`| `integer` | Total de conversas respondidas. |
 | `reply_rate` | `integer` | Taxa de resposta da campanha (x10000). |
-| `avg_reply_latency_sec` | `float` | Média de tempo de resposta em segundos. |
 | `temperature_label` | `text` | Temperatura geral da campanha baseada na `reply_rate`. |
+
+-----
+
+*Para a estrutura completa das tabelas, consulte os modelos em `adapters/repository/sql_email_repository.py`.*
 
 -----
 
@@ -136,22 +177,6 @@ Agrega os resultados de todas as contas para cada dia de operação.
 ├── infrastructure/    # Arquivos de infraestrutura (Dockerfile, docker-compose.yml)
 └── tests/             # Testes unitários e de integração
 ```
-
------
-
-## Variáveis de Ambiente
-
-| Chave | Exemplo / Descrição |
-| :--- | :--- |
-| **OAuth / Graph** | |
-| `TENANT_ID`, `CLIENT_ID`, `CLIENT_SECRET` | Credenciais do App Registration no Azure AD. |
-| `EMAIL_ACCOUNTS` | Lista de e-mails a serem monitorados, separados por vírgula. |
-| **Filtros e Regras** | |
-| `SUBJECT_FILTER` | `OPORTUNIDADE DE ACORDO,PROPOSTA DE ACORDO` (Processa apenas e-mails cujos assuntos contenham um destes termos). |
-| `IGNORE_SUBJECT_PREFIXES` | `ENC,FW,RESPOSTA AUTOMÁTICA` (Prefixos de assunto que não são considerados respostas genuínas). |
-| `SENT_FOLDER_NAME` | `Itens Enviados` (Nome da pasta de onde os e-mails são lidos). |
-| **PostgreSQL** | |
-| `POSTGRES_HOST/PORT/DB/USER/PASSWORD` | Credenciais de acesso ao banco de dados. |
 
 -----
 
@@ -187,15 +212,15 @@ poetry run python -m application.main --once
 
 ## Consultas para Dashboards
 
-O sistema foi projetado para alimentar dashboards de BI. As queries abaixo são exemplos do que pode ser criado.
+O sistema foi projetado para alimentar dashboards de BI. A query abaixo é um exemplo do poder de análise dos dados coletados.
 
 ```sql
 -- KPI: Ranking de Performance por Conta (últimos 30 dias)
 -- Combina taxa de resposta e pontuação média para criar um índice de performance
 SELECT
-  a.email_address                                                                   AS "Conta",
+  a.email_address AS "Conta",
   ROUND(100.0 * SUM(e.is_replied::int) / NULLIF(SUM((NOT e.is_bounced)::int), 0), 2) AS "Taxa de Resposta (%)",
-  ROUND(AVG(e.engagement_score), 2)                                                 AS "Pontuação Média",
+  ROUND(AVG(e.engagement_score), 2) AS "Pontuação Média",
   ROUND((SUM(e.is_replied::int) / NULLIF(SUM((NOT e.is_bounced)::int), 0)) * AVG(e.engagement_score), 2) AS "Índice de Performance"
 FROM
   public.emails e
@@ -216,7 +241,7 @@ ORDER BY
 ## Roadmap / TODO
 
   - [ ] **Entidade `Contatos`**: Criar uma tabela `contacts` para rastrear o histórico de engajamento e a "saúde" de cada destinatário ao longo do tempo.
-  - [ ] **Análise de Sentimento**: Implementar uma análise básica de sentimento no corpo das respostas para classificar o humor do cliente (positivo, negativo, neutro).
+  - [ ] **Análise de Sentimento**: Implementar uma análise básica de sentimento no corpo das respostas para classificar o humor do cliente.
 
 -----
 
