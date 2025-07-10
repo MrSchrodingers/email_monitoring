@@ -1,0 +1,1 @@
+SELECT EXTRACT(hour FROM sent_datetime AT TIME ZONE 'America/Sao_Paulo') AS "Hora do Dia", ROUND(AVG(engagement_score)) AS "Pontuação Média" FROM public.emails WHERE sent_datetime >= (CURRENT_DATE - INTERVAL '90 days') AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%' GROUP BY 1 ORDER BY 1;

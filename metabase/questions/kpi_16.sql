@@ -1,0 +1,1 @@
+SELECT SUBSTRING(recipient FROM '@(.*)$') AS "Domínio do Destinatário", COUNT(*) AS "Total de Bounces" FROM (SELECT unnest(recipient_addresses) AS recipient FROM public.emails WHERE is_bounced = TRUE AND sent_datetime >= (CURRENT_DATE - INTERVAL '90 days')) AS unnested_emails GROUP BY 1 HAVING COUNT(*) > 5 ORDER BY 2 DESC LIMIT 25;

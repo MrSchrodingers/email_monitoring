@@ -1,0 +1,1 @@
+SELECT unnest(e.recipient_addresses) AS "Destinatário", SUM(e.engagement_score) AS "Pontuação Total", ROUND(AVG(e.engagement_score), 1) AS "Pontuação Média", COUNT(*) AS "E-mails Respondidos" FROM public.emails e WHERE e.is_replied=TRUE AND e.sent_datetime >= (CURRENT_DATE - INTERVAL '90 days') GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 30;

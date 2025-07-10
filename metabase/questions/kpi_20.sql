@@ -1,0 +1,1 @@
+SELECT a.email_address AS "Conta", MIN(e.sent_datetime)::date AS "Primeiro Envio", MAX(e.sent_datetime)::date AS "Último Envio", COUNT(DISTINCT e.sent_datetime::date) AS "Dias Ativos" FROM public.emails e JOIN public.accounts a ON a.id = e.account_id GROUP BY 1 ORDER BY 4 DESC;

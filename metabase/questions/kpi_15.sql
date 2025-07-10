@@ -1,0 +1,1 @@
+SELECT DATE_TRUNC('week', e.sent_datetime AT TIME ZONE 'America/Sao_Paulo')::date AS "Semana", ROUND(100.0 * SUM(e.is_bounced::int) / COUNT(e.id), 2) AS "Taxa de Bounce (%)" FROM public.emails e WHERE e.sent_datetime >= (CURRENT_DATE - INTERVAL '90 days') AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%' GROUP BY 1 ORDER BY 1;
