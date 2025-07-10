@@ -1,5 +1,9 @@
 ### **Dashboard Completo de Métricas de E-mail**
 
+<p align="right">
+  <a href="../../README.md">⬅️ Voltar para o README</a>
+</p>
+
 #### **Seção 1: Visão Geral e Performance Agregada**
 
 -----
