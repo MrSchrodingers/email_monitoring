@@ -1,83 +1,95 @@
 ### **Dashboard Completo de Métricas de E-mail**
 
-Aqui estão 12 KPIs para uma visão 360° da sua operação de e-mail.
-
 #### **Seção 1: Visão Geral e Performance Agregada**
 
 -----
 
-#### **KPI 1: Resumo de Performance Diária por Conta (Otimizado)**
+#### **KPI 1: Resumo de Performance Diária por Conta (Corrigido)**
 
-Visão geral dos resultados de cada conta para um dia específico. Adicionamos a latência média de resposta para uma análise mais profunda do engajamento.
+Visão geral dos resultados de cada conta, mostrando sempre a medição mais recente para cada dia, evitando duplicatas.
 
 > **Visualização:** Tabela.
 
 ```sql
--- Resumo de performance diária por conta, incluindo latência média de resposta.
-SELECT
-  a.email_address                                             AS "Conta",
-  m.date                                                      AS "Data",
-  m.total_sent                                                AS "Enviados (Líquido)",
-  m.total_delivered                                           AS "Entregues",
-  m.total_replied                                             AS "Respostas",
-  m.total_bounced                                             AS "Bounces",
-  ROUND(m.reply_rate / 100.0, 2)                              AS "Taxa de Resposta (%)",
-  m.temperature_label                                         AS "Temp. da Campanha",
-  -- Converte a latência de segundos para um formato mais legível
-  TO_CHAR((m.avg_reply_latency_sec || ' second')::interval, 'HH24:MI:SS') AS "Latência Média de Resposta"
+-- Seleciona APENAS a medição mais recente de cada conta para cada dia
+SELECT DISTINCT ON (a.email_address, m.date)
+    a.email_address                                                       AS "Conta",
+    m.date                                                                AS "Data",
+    m.total_sent                                                          AS "Enviados (Líquido)",
+    m.total_delivered                                                     AS "Entregues",
+    m.total_replied                                                       AS "Respostas",
+    m.total_bounced                                                       AS "Bounces",
+    ROUND(m.reply_rate / 100.0, 2)                                        AS "Taxa de Resposta (%)",
+    m.temperature_label                                                   AS "Temp. da Campanha",
+    TO_CHAR((m.avg_reply_latency_sec || ' second')::interval, 'HH24:MI:SS') AS "Latência Média de Resposta"
 FROM
-  public.metrics m
+    public.metrics m
 JOIN
-  public.accounts a ON m.account_id = a.id
--- [[ WHERE {{data}} ]] -- Filtro opcional para o dashboard
+    public.accounts a ON m.account_id = a.id
 ORDER BY
-  m.date DESC, a.email_address;
+    a.email_address, m.date, m.run_at DESC;
 ```
 
 -----
 
-#### **KPI 2: Evolução das Taxas de Engajamento (Otimizado)**
+#### **KPI 2: Evolução das Taxas por Conta (Visão de Tendência)**
 
-Acompanhe a saúde da entregabilidade e do engajamento ao longo do tempo. A consulta agora calcula a taxa real diária, em vez de uma média de médias.
+Calcula a taxa de resposta real a partir dos dados brutos, agrupados por semana para identificar tendências de forma clara e individual por conta.
 
-> **Visualização:** Gráfico de Linha com duas séries (Taxa de Entrega, Taxa de Resposta).
+> **Visualização:** Gráfico de Linhas (com a coluna "Conta" em "Separar por").
 
 ```sql
--- Evolução da performance geral nos últimos 30 dias.
+-- Calcula a evolução semanal REAL das taxas de resposta por conta
 SELECT
-  m.date                                                                  AS "Data",
-  -- Calcula a taxa de entrega real do dia somando os totais de todas as contas
-  ROUND(100.0 * SUM(m.total_delivered) / NULLIF(SUM(m.total_sent), 0), 2)  AS "Taxa de Entrega (%)",
-  -- Calcula a taxa de resposta real do dia
-  ROUND(100.0 * SUM(m.total_replied) / NULLIF(SUM(m.total_delivered), 0), 2) AS "Taxa de Resposta (%)"
+    DATE_TRUNC('week', e.sent_datetime AT TIME ZONE 'America/Sao_Paulo')::date AS "Semana",
+    a.email_address AS "Conta",
+    ROUND(
+        100.0 * SUM(CASE WHEN e.is_replied THEN 1 ELSE 0 END)
+        /
+        NULLIF(SUM(CASE WHEN NOT e.is_bounced THEN 1 ELSE 0 END), 0)
+    , 2) AS "Taxa de Resposta (%)"
 FROM
-  public.metrics m
+    public.emails e
+JOIN
+    public.accounts a ON e.account_id = a.id
 WHERE
-  m.date >= CURRENT_DATE - INTERVAL '30 days' -- Ajuste o período conforme necessário
+    e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%' AND e.subject NOT ILIKE 'Resumo:%'
+    AND e.subject NOT ILIKE 'Ausência Temporária:%' AND e.subject NOT ILIKE 'Out of Office:%'
+    AND e.sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
 GROUP BY
-  m.date
+    "Semana", "Conta"
 ORDER BY
-  m.date;
+    "Semana" ASC, "Conta";
 ```
 
 -----
 
-#### **KPI 3: Funil de Engajamento do Dia (Novo)**
+#### **KPI 3: Funil de Engajamento do Dia (por Conta)**
 
-Uma visão macro do funil de interações para o dia corrente, ideal para o topo do dashboard.
+Painel de performance do dia para cada conta, com taxas de entrega e resposta para uma análise rápida.
 
-> **Visualização:** Funil ou Cartões com "Número Grande".
+> **Visualização:** Tabela.
 
 ```sql
--- Funil de engajamento para os e-mails enviados hoje (considerando o fuso de Londrina)
+-- Funil de performance de hoje para cada conta, com taxas
 SELECT
-  COUNT(*)                                    AS "1. E-mails Enviados",
-  SUM(CASE WHEN NOT is_bounced THEN 1 ELSE 0 END) AS "2. E-mails Entregues",
-  SUM(CASE WHEN is_replied THEN 1 ELSE 0 END)     AS "3. E-mails Respondidos"
+    a.email_address AS "Conta",
+    COUNT(e.id) AS "Enviados (Líquido)",
+    SUM(CASE WHEN NOT e.is_bounced THEN 1 ELSE 0 END) AS "Entregues",
+    SUM(CASE WHEN e.is_replied THEN 1 ELSE 0 END) AS "Respondidos",
+    ROUND(100.0 * SUM(CASE WHEN NOT e.is_bounced THEN 1 ELSE 0 END) / NULLIF(COUNT(e.id), 0), 2) AS "Taxa de Entrega (%)",
+    ROUND(100.0 * SUM(CASE WHEN e.is_replied THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN NOT e.is_bounced THEN 1 ELSE 0 END), 0), 2) AS "Taxa de Resposta (%)"
 FROM
-  public.emails
+    public.emails e
+JOIN
+    public.accounts a ON e.account_id = a.id
 WHERE
-  sent_datetime >= DATE_TRUNC('day', NOW() AT TIME ZONE 'America/Sao_Paulo');
+    e.sent_datetime >= DATE_TRUNC('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+    AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%' AND e.subject NOT ILIKE 'Resumo:%'
+GROUP BY
+    a.email_address
+ORDER BY
+    "Respondidos" DESC;
 ```
 
 -----
@@ -86,87 +98,102 @@ WHERE
 
 -----
 
-#### **KPI 4: Análise de Pontuação de Engajamento (Novo)**
+#### **KPI 4: Análise de Pontuação de Engajamento (por Conta)**
 
-Entenda a distribuição das pontuações dos e-mails respondidos. Essencial para ver o impacto dos bônus de latência.
+Entenda a distribuição das pontuações dos e-mails respondidos, agora com quebra por conta para comparar a qualidade do engajamento.
 
-> **Visualização:** Gráfico de Barras ou Tabela.
+> **Visualização:** Tabela ou Gráfico de Barras.
 
 ```sql
--- Distribuição de pontuação para e-mails que receberam resposta
+-- Distribuição de pontuação por conta para e-mails que receberam resposta
 SELECT
-  engagement_score                                                        AS "Pontuação",
-  COUNT(*)                                                                AS "Total de E-mails",
-  -- Formata a latência média para o formato "dias hh:mm:ss"
-  TO_CHAR((AVG(reply_latency_sec) || ' second')::interval, 'DD"d "HH24:MI:SS') AS "Latência Média"
+    a.email_address AS "Conta",
+    e.engagement_score AS "Pontuação",
+    COUNT(*) AS "Total de Respostas",
+    TO_CHAR((AVG(e.reply_latency_sec) || ' second')::interval, 'DD"d "HH24:MI:SS') AS "Latência Média"
 FROM
-  public.emails
+    public.emails e
+JOIN
+    public.accounts a ON e.account_id = a.id
 WHERE
-  is_replied = true AND sent_datetime >= CURRENT_DATE - INTERVAL '30 days'
+    e.is_replied = true
+    AND e.sent_datetime >= CURRENT_DATE - INTERVAL '30 days'
+    AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%'
 GROUP BY
-  engagement_score
+    a.email_address,
+    e.engagement_score
 ORDER BY
-  engagement_score DESC;
+    a.email_address,
+    e.engagement_score DESC;
 ```
 
 -----
 
-#### **KPI 5: Top 20 Assuntos por Pontuação de Engajamento (Melhorado)**
+#### **KPI 5: Top 20 Assuntos por Pontuação de Engajamento**
 
-Em vez de apenas a taxa de resposta, ordenamos pelo `engagement_score` médio, que valoriza respostas rápidas.
+Ordena os assuntos pela `Pontuação Média`, que valoriza respostas rápidas e efetivas, em vez de apenas o volume.
 
 > **Visualização:** Tabela.
 
 ```sql
 -- Assuntos que geram as respostas mais valiosas (rápidas)
 SELECT
-  e.subject                                                             AS "Assunto",
-  COUNT(*)                                                              AS "Enviados",
-  SUM(e.is_replied::int)                                                AS "Respostas",
-  ROUND(100.0 * SUM(e.is_replied::int) / NULLIF(COUNT(*), 0), 2)         AS "Taxa de Resposta (%)",
-  ROUND(AVG(e.engagement_score), 2)                                     AS "Pontuação Média"
+    e.subject AS "Assunto",
+    COUNT(*) AS "Enviados",
+    SUM(e.is_replied::int) AS "Respostas",
+    ROUND(100.0 * SUM(e.is_replied::int) / NULLIF(COUNT(*), 0), 2) AS "Taxa de Resposta (%)",
+    ROUND(AVG(e.engagement_score), 2) AS "Pontuação Média"
 FROM
-  public.emails e
+    public.emails e
 WHERE
-  e.sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
-  AND e.is_bounced IS FALSE
+    e.sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
+    AND e.is_bounced IS FALSE
+    AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%'
 GROUP BY
-  e.subject
+    e.subject
 HAVING
-  COUNT(*) >= 20 -- Apenas assuntos com um volume mínimo para relevância estatística
+    COUNT(*) >= 20 -- Apenas assuntos com um volume mínimo
 ORDER BY
-  "Pontuação Média" DESC, "Taxa de Resposta (%)" DESC
+    "Pontuação Média" DESC, "Taxa de Resposta (%)" DESC
 LIMIT 20;
 ```
 
 -----
 
-#### **KPI 6: Distribuição da Latência de Resposta (Novo)**
+#### **KPI 6: Distribuição da Latência de Resposta (com Percentual)**
 
-Entenda *quando* os clientes respondem. Isso ajuda a alinhar as expectativas e a otimizar o timing de follow-ups.
+Mostra não apenas quantos, mas qual a proporção de respostas em cada faixa de tempo, facilitando a compreensão do comportamento do cliente.
 
 > **Visualização:** Gráfico de Pizza ou Barras.
 
 ```sql
--- Em quanto tempo as respostas chegam?
+-- Em quanto tempo as respostas chegam? (com percentual)
+WITH latency_counts AS (
+    SELECT
+        CASE
+            WHEN reply_latency_sec < 3600 THEN '01. Em menos de 1 hora'
+            WHEN reply_latency_sec < 14400 THEN '02. Entre 1 e 4 horas'
+            WHEN reply_latency_sec < 43200 THEN '03. Entre 4 e 12 horas'
+            WHEN reply_latency_sec < 86400 THEN '04. Entre 12 e 24 horas'
+            WHEN reply_latency_sec < 172800 THEN '05. Entre 24 e 48 horas'
+            ELSE '06. Mais de 48 horas'
+        END AS "Faixa de Latência",
+        COUNT(*) AS "Total de Respostas"
+    FROM
+        public.emails
+    WHERE
+        is_replied = true AND sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
+    GROUP BY
+        "Faixa de Latência"
+)
 SELECT
-  CASE
-    WHEN reply_latency_sec < 3600             THEN '01. Em menos de 1 hora'
-    WHEN reply_latency_sec < 14400            THEN '02. Entre 1 e 4 horas'
-    WHEN reply_latency_sec < 43200            THEN '03. Entre 4 e 12 horas'
-    WHEN reply_latency_sec < 86400            THEN '04. Entre 12 e 24 horas'
-    WHEN reply_latency_sec < 172800           THEN '05. Entre 24 e 48 horas'
-    ELSE                                           '06. Mais de 48 horas'
-  END AS "Faixa de Latência",
-  COUNT(*) AS "Total de Respostas"
+    "Faixa de Latência",
+    "Total de Respostas",
+    ROUND(100.0 * "Total de Respostas" / SUM("Total de Respostas") OVER(), 2) AS "Percentual (%)"
 FROM
-  public.emails
-WHERE
-  is_replied = true AND sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
-GROUP BY
-  "Faixa de Latência"
+    latency_counts
 ORDER BY
-  "Faixa de Latência";
+    "Faixa de Latência";
 ```
 
 -----
@@ -175,89 +202,87 @@ ORDER BY
 
 -----
 
-#### **KPI 7: Ranking de Performance por Conta (Novo)**
+#### **KPI 7: Ranking de Performance por Conta**
 
-Uma visão clara de quais contas estão performando melhor com base em um índice que combina taxa de resposta e pontuação.
+Um índice claro para ranquear as contas, combinando a taxa de resposta com a qualidade (pontuação) dessas respostas.
 
 > **Visualização:** Tabela.
 
 ```sql
 -- Ranking de contas por um índice de performance (taxa de resposta * pontuação média)
 SELECT
-  a.email_address                                                                   AS "Conta",
-  ROUND(100.0 * SUM(e.is_replied::int) / NULLIF(SUM((NOT e.is_bounced)::int), 0), 2) AS "Taxa de Resposta (%)",
-  ROUND(AVG(e.engagement_score), 2)                                                 AS "Pontuação Média",
-  -- Índice de Performance: um score mais alto indica melhor performance geral
-  ROUND((SUM(e.is_replied::int) / NULLIF(SUM((NOT e.is_bounced)::int), 0)) * AVG(e.engagement_score), 2) AS "Índice de Performance"
+    a.email_address AS "Conta",
+    ROUND(100.0 * SUM(e.is_replied::int) / NULLIF(SUM((NOT e.is_bounced)::int), 0), 2) AS "Taxa de Resposta (%)",
+    ROUND(AVG(e.engagement_score), 2) AS "Pontuação Média",
+    ROUND((SUM(e.is_replied::int) / NULLIF(SUM((NOT e.is_bounced)::int), 0)) * AVG(e.engagement_score), 2) AS "Índice de Performance"
 FROM
-  public.emails e
+    public.emails e
 JOIN
-  public.accounts a ON a.id = e.account_id
+    public.accounts a ON a.id = e.account_id
 WHERE
-  e.sent_datetime >= CURRENT_DATE - INTERVAL '30 days'
+    e.sent_datetime >= CURRENT_DATE - INTERVAL '30 days'
+    AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%'
 GROUP BY
-  a.email_address
+    a.email_address
 ORDER BY
-  "Índice de Performance" DESC;
+    "Índice de Performance" DESC;
 ```
 
 -----
 
-#### **KPI 8: Mapa de Calor de Engajamento por Hora do Dia (Melhorado)**
+#### **KPI 8: Mapa de Calor de Engajamento por Hora do Dia**
 
-Em vez de apenas volume, este mapa mostra as horas do dia com **maior pontuação de engajamento**, revelando os melhores horários para enviar e-mails.
+Revela os melhores horários para enviar e-mails com base na pontuação média de engajamento, não apenas no volume.
 
 > **Visualização:** Mapa de Calor (Heatmap).
 
 ```sql
 -- Média de engagement_score por hora do dia e dia da semana
 SELECT
-  -- Extrai a hora do dia (0-23)
-  EXTRACT(hour FROM sent_datetime AT TIME ZONE 'America/Sao_Paulo') AS "Hora do Dia",
-  -- Extrai o dia da semana (0=Domingo, 1=Segunda, etc.) e formata para ordenação
-  TO_CHAR(sent_datetime AT TIME ZONE 'America/Sao_Paulo', 'ID - Day') AS "Dia da Semana",
-  ROUND(AVG(engagement_score)) AS "Pontuação Média de Engajamento"
+    EXTRACT(hour FROM sent_datetime AT TIME ZONE 'America/Sao_Paulo') AS "Hora do Dia",
+    TO_CHAR(sent_datetime AT TIME ZONE 'America/Sao_Paulo', 'ID - Day') AS "Dia da Semana",
+    ROUND(AVG(engagement_score)) AS "Pontuação Média de Engajamento"
 FROM
-  public.emails
+    public.emails e
 WHERE
-  sent_datetime >= CURRENT_DATE - INTERVAL '28 days'
+    sent_datetime >= CURRENT_DATE - INTERVAL '28 days'
+    AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%'
 GROUP BY
-  1, 2
+    1, 2
 ORDER BY
-  2, 1;
+    2, 1;
 ```
 
 -----
 
-#### **KPI 9: Diagnóstico de Bounces por Domínio (Novo)**
+#### **KPI 9: Diagnóstico de Bounces por Domínio**
 
-Identifica se há problemas de entrega com domínios específicos, ajudando a detectar bloqueios ou problemas de reputação.
+Ajuda a detectar problemas de entrega com domínios específicos, como bloqueios de servidor ou domínios que não existem mais.
 
 > **Visualização:** Tabela.
 
 ```sql
 -- Domínios com maior número de bounces
 SELECT
-  -- Extrai o domínio do endereço de e-mail
-  SUBSTRING(recipient FROM '@(.*)$') AS "Domínio do Destinatário",
-  COUNT(*) AS "Total de Bounces"
+    SUBSTRING(recipient FROM '@(.*)$') AS "Domínio do Destinatário",
+    COUNT(*) AS "Total de Bounces"
 FROM (
-  SELECT unnest(recipient_addresses) AS recipient
-  FROM public.emails
-  WHERE is_bounced = TRUE AND sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
+    SELECT unnest(recipient_addresses) AS recipient
+    FROM public.emails
+    WHERE is_bounced = TRUE AND sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
 ) AS unnested_emails
 GROUP BY
-  1
+    1
 HAVING
-  COUNT(*) > 5 -- Mostra apenas domínios com um número significativo de falhas
+    COUNT(*) > 5 -- Apenas domínios com um número significativo de falhas
 ORDER BY
-  "Total de Bounces" DESC
+    "Total de Bounces" DESC
 LIMIT 25;
 ```
 
 -----
 
-#### **KPI 10: Comparativo de Temperatura por Conta (Otimizado)**
+#### **KPI 10: Comparativo de Temperatura por Conta (Percentual)**
 
 Visão percentual da distribuição de temperatura, permitindo uma comparação justa entre contas com volumes de envio diferentes.
 
@@ -266,46 +291,56 @@ Visão percentual da distribuição de temperatura, permitindo uma comparação 
 ```sql
 -- Distribuição percentual de temperatura por conta
 SELECT
-  a.email_address                                                                    AS "Conta",
-  ROUND(100.0 * SUM((e.temperature_label = 'quente')::int) / COUNT(*), 1)             AS "% Quente",
-  ROUND(100.0 * SUM((e.temperature_label = 'morno')::int) / COUNT(*), 1)              AS "% Morno",
-  ROUND(100.0 * SUM((e.temperature_label = 'frio')::int) / COUNT(*), 1)               AS "% Frio",
-  COUNT(*)                                                                           AS "Total de E-mails"
+    a.email_address AS "Conta",
+    ROUND(100.0 * SUM((e.temperature_label = 'quente')::int) / COUNT(*), 1) AS "% Quente",
+    ROUND(100.0 * SUM((e.temperature_label = 'morno')::int) / COUNT(*), 1) AS "% Morno",
+    ROUND(100.0 * SUM((e.temperature_label = 'frio')::int) / COUNT(*), 1)  AS "% Frio",
+    COUNT(*) AS "Total de Envios (Líquido)"
 FROM
-  public.emails e
+    public.emails e
 JOIN
-  public.accounts a ON a.id = e.account_id
+    public.accounts a ON a.id = e.account_id
 WHERE
-  e.sent_datetime >= DATE_TRUNC('month', CURRENT_DATE) -- Filtro para o mês atual
+    e.sent_datetime >= CURRENT_DATE - INTERVAL '30 days' -- Filtro para performance recente
+    AND e.subject NOT ILIKE 'ENC:%' AND e.subject NOT ILIKE 'FW:%'
 GROUP BY
-  a.email_address
+    a.email_address
 ORDER BY
-  "% Quente" DESC;
+    "% Quente" DESC;
 ```
 
 -----
 
-#### **KPI 11 & 12: Listas de Diagnóstico (Originais Otimizadas)**
+#### **KPI 11 & 12: Listas de Diagnóstico (com mais Contexto)**
 
-Consultas diretas para encontrar os principais ofensores de bounce e os destinatários mais engajados.
+Consultas diretas para encontrar os principais ofensores de bounce e os destinatários mais engajados, agora com informações adicionais.
 
 > **Visualização:** Tabela.
 
 ```sql
--- KPI 11: Top 30 Destinatários com mais Bounces
+-- KPI 11: Top 30 Destinatários com mais Bounces (com contexto)
 SELECT
-  unnest(e.recipient_addresses) AS "Destinatário",
-  COUNT(*)                      AS "Total de Bounces"
-FROM public.emails e
-WHERE e.is_bounced IS TRUE
+    unnest(e.recipient_addresses) AS "Destinatário",
+    COUNT(*) AS "Total de Bounces",
+    STRING_AGG(DISTINCT a.email_address, ', ') AS "Contas de Origem",
+    MAX(e.sent_datetime)::date AS "Data do Último Bounce"
+FROM
+    public.emails e
+JOIN
+    public.accounts a ON e.account_id = a.id
+WHERE
+    e.is_bounced IS TRUE AND e.sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
 GROUP BY 1 ORDER BY 2 DESC LIMIT 30;
 
--- KPI 12: Top 30 Destinatários mais Engajados (por pontuação)
+-- KPI 12: Top 30 Destinatários mais Engajados (com pontuação média)
 SELECT
-  unnest(e.recipient_addresses) AS "Destinatário",
-  SUM(e.engagement_score)       AS "Pontuação Total",
-  COUNT(*)                      AS "E-mails Recebidos"
-FROM public.emails e
-WHERE e.is_replied = TRUE
+    unnest(e.recipient_addresses) AS "Destinatário",
+    SUM(e.engagement_score) AS "Pontuação Total",
+    ROUND(AVG(e.engagement_score), 1) AS "Pontuação Média",
+    COUNT(*) AS "E-mails Respondidos"
+FROM
+    public.emails e
+WHERE
+    e.is_replied = TRUE AND e.sent_datetime >= CURRENT_DATE - INTERVAL '90 days'
 GROUP BY 1 ORDER BY 2 DESC LIMIT 30;
 ```
